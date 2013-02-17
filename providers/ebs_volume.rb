@@ -46,13 +46,24 @@ end
 action :attach do
   # determine_volume returns a Hash, not a Mash, and the keys are
   # symbols, not strings.
-  vol = determine_volume
+  begin
+    vol = determine_volume
+  rescue RuntimeError => e
+    Chef::Log.warn("No such volume")
+    converge_by("create a volume with id=#{new_resource.snapshot_id} size=#{new_resource.size} availability_zone=#{new_resource.availability_zone} and update the node data with created volume's id") do
+      nvid = create_volume(new_resource.snapshot_id, new_resource.size, new_resource.availability_zone, new_resource.timeout)
+      new_resource.update_volume(nvid)
+      node.set['aws']['ebs_volume'][new_resource.name]['volume_id'] = nvid
+      node.save unless Chef::Config[:solo]
+    end if new_resource.create_if_missing
+  end
 
+  vol = determine_volume
   if vol[:aws_status] == "in-use"
     if vol[:aws_instance_id] != instance_id
       raise "Volume with id #{vol[:aws_id]} exists but is attached to instance #{vol[:aws_instance_id]}"
     else
-      Chef::Log.debug("Volume is already attached")
+      Chef::Log.info("Volume is already attached")
     end
   else
     converge_by("attach the volume with aws_id=#{vol[:aws_id]} id=#{instance_id} device=#{new_resource.device} and update the node data with created volume's id") do
@@ -227,7 +238,7 @@ def detach_volume(volume_id, timeout)
             Chef::Log.debug("Volume: #{vol.inspect}")
           end
         else
-          Chef::Log.debug("Volume #{volume_id} no longer exists")
+          Chef::Log.info("Volume #{volume_id} no longer exists")
           break
         end
         sleep 3
